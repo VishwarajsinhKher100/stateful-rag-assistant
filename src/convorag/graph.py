@@ -1,11 +1,22 @@
+from typing import Annotated
+
 from dotenv import load_dotenv
+from langchain_core.messages import AnyMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_groq import ChatGroq
-from langgraph.graph import StateGraph, MessagesState, START
-from langchain_core.messages import SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, StateGraph
+from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
+
 from .rag_store import retrieve_context_for_session
 
 load_dotenv()
+
+
+class GraphState(BaseModel):
+    messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+
 
 llm = ChatGroq(
     model="openai/gpt-oss-20b",
@@ -13,16 +24,17 @@ llm = ChatGroq(
 )
 
 
-def chatbot(state: MessagesState, config: dict = None):
-    messages = state["messages"]
+def chatbot(
+    state: GraphState, config: RunnableConfig | None = None
+) -> dict[str, list[AnyMessage]]:
+    messages = state.messages
     latest_user_message = messages[-1].content if messages else ""
+    if not isinstance(latest_user_message, str):
+        latest_user_message = str(latest_user_message)
 
-    # Safely extract session_id from thread configuration
-    session_id = ""
-    if config and isinstance(config, dict):
-        configurable = config.get("configurable", {})
-        if configurable:
-            session_id = configurable.get("thread_id", "")
+    configurable = config.get("configurable", {}) if config else {}
+    thread_id = configurable.get("thread_id")
+    session_id = thread_id if isinstance(thread_id, str) else ""
 
     # Retrieve PDF context specific to this session
     context = (
@@ -43,7 +55,7 @@ def chatbot(state: MessagesState, config: dict = None):
     return {"messages": [response]}
 
 
-builder = StateGraph(MessagesState)
+builder = StateGraph(GraphState)
 builder.add_node("chatbot", chatbot)
 builder.add_edge(START, "chatbot")
 
